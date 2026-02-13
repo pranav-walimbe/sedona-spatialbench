@@ -21,6 +21,7 @@ use crate::csv::*;
 use crate::generate::{generate_in_chunks, Source};
 use crate::output_plan::{OutputLocation, OutputPlan};
 use crate::parquet::generate_parquet;
+use crate::s3_writer::S3Writer;
 use crate::tbl::*;
 use crate::{OutputFormat, Table, WriterSink};
 use log::{debug, info};
@@ -32,6 +33,7 @@ use spatialbench_arrow::{
 };
 use std::io;
 use std::io::BufWriter;
+use std::sync::Arc;
 use tokio::task::{JoinError, JoinSet};
 
 /// Runs multiple [`OutputPlan`]s in parallel, managing the number of threads
@@ -195,7 +197,8 @@ where
     match plan.output_location() {
         OutputLocation::Stdout => {
             let sink = WriterSink::new(io::stdout());
-            generate_in_chunks(sink, sources, num_threads).await
+            generate_in_chunks(sink, sources, num_threads).await?;
+            Ok(())
         }
         OutputLocation::File(path) => {
             // if the output already exists, skip running
@@ -218,6 +221,14 @@ where
             })?;
             Ok(())
         }
+        OutputLocation::S3 { uri, path, client } => {
+            info!("Writing to S3: {}", uri);
+            let s3_writer = S3Writer::with_client(Arc::clone(client), path);
+            let sink = WriterSink::new(s3_writer);
+            let sink = generate_in_chunks(sink, sources, num_threads).await?;
+            sink.into_inner().finish().await?;
+            Ok(())
+        }
     }
 }
 
@@ -228,7 +239,7 @@ where
 {
     match plan.output_location() {
         OutputLocation::Stdout => {
-            let writer = BufWriter::with_capacity(32 * 1024 * 1024, io::stdout()); // 32MB buffer
+            let writer = BufWriter::with_capacity(crate::plan::PARQUET_BUFFER_SIZE, io::stdout());
             generate_parquet(writer, sources, num_threads, plan.parquet_compression()).await
         }
         OutputLocation::File(path) => {
@@ -242,7 +253,7 @@ where
             let file = std::fs::File::create(&temp_path).map_err(|err| {
                 io::Error::other(format!("Failed to create {temp_path:?}: {err}"))
             })?;
-            let writer = BufWriter::with_capacity(32 * 1024 * 1024, file); // 32MB buffer
+            let writer = BufWriter::with_capacity(crate::plan::PARQUET_BUFFER_SIZE, file);
             generate_parquet(writer, sources, num_threads, plan.parquet_compression()).await?;
             // rename the temp file to the final path
             std::fs::rename(&temp_path, path).map_err(|e| {
@@ -251,6 +262,11 @@ where
                 ))
             })?;
             Ok(())
+        }
+        OutputLocation::S3 { uri, path, client } => {
+            info!("Writing parquet to S3: {}", uri);
+            let s3_writer = S3Writer::with_client(Arc::clone(client), path);
+            generate_parquet(s3_writer, sources, num_threads, plan.parquet_compression()).await
         }
     }
 }

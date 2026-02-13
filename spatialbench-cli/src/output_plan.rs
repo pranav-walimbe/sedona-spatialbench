@@ -20,21 +20,33 @@
 //! * [`OutputPlanGenerator`]: plans the output files to be generated
 
 use crate::plan::GenerationPlan;
+use crate::s3_writer::{build_s3_client, parse_s3_uri};
 use crate::{OutputFormat, Table};
 use log::debug;
+use object_store::ObjectStore;
 use parquet::basic::Compression;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Where a partition will be output
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum OutputLocation {
     /// Output to a file
     File(PathBuf),
     /// Output to stdout
     Stdout,
+    /// Output to S3 with a shared client
+    S3 {
+        /// The full S3 URI for this object (e.g. `s3://bucket/path/to/file.parquet`)
+        uri: String,
+        /// The object path within the bucket (e.g. `path/to/file.parquet`)
+        path: String,
+        /// Shared S3 client for the bucket
+        client: Arc<dyn ObjectStore>,
+    },
 }
 
 impl Display for OutputLocation {
@@ -48,12 +60,13 @@ impl Display for OutputLocation {
                 write!(f, "{}", file.to_string_lossy())
             }
             OutputLocation::Stdout => write!(f, "Stdout"),
+            OutputLocation::S3 { uri, .. } => write!(f, "{}", uri),
         }
     }
 }
 
 /// Describes an output partition (file) that will be generated
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct OutputPlan {
     /// The table
     table: Table,
@@ -151,6 +164,8 @@ pub struct OutputPlanGenerator {
     /// Output directories that have been created so far
     /// (used to avoid creating the same directory multiple times)
     created_directories: HashSet<PathBuf>,
+    /// Shared S3 client, lazily created on first S3 output location
+    s3_client: Option<Arc<dyn ObjectStore>>,
 }
 
 impl OutputPlanGenerator {
@@ -171,6 +186,7 @@ impl OutputPlanGenerator {
             output_dir,
             output_plans: Vec::new(),
             created_directories: HashSet::new(),
+            s3_client: None,
         }
     }
 
@@ -282,17 +298,48 @@ impl OutputPlanGenerator {
                 OutputFormat::Parquet => "parquet",
             };
 
-            let mut output_path = self.output_dir.clone();
-            if let Some(part) = part {
-                // If a partition is specified, create a subdirectory for it
-                output_path.push(table.to_string());
-                self.ensure_directory_exists(&output_path)?;
-                output_path.push(format!("{table}.{part}.{extension}"));
+            // Check if output_dir is an S3 URI
+            let output_dir_str = self.output_dir.to_string_lossy();
+            if output_dir_str.starts_with("s3://") {
+                // Handle S3 path
+                let base_uri = output_dir_str.trim_end_matches('/');
+                let s3_uri = if let Some(part) = part {
+                    format!("{base_uri}/{table}/{table}.{part}.{extension}")
+                } else {
+                    format!("{base_uri}/{table}.{extension}")
+                };
+
+                // Lazily build the S3 client on first use, then reuse it
+                let client = if let Some(ref client) = self.s3_client {
+                    Arc::clone(client)
+                } else {
+                    let (bucket, _) = parse_s3_uri(&s3_uri)?;
+                    let client = build_s3_client(&bucket)?;
+                    self.s3_client = Some(Arc::clone(&client));
+                    client
+                };
+
+                let (_, path) = parse_s3_uri(&s3_uri)?;
+
+                Ok(OutputLocation::S3 {
+                    uri: s3_uri,
+                    path,
+                    client,
+                })
             } else {
-                // No partition specified, output to a single file
-                output_path.push(format!("{table}.{extension}"));
+                // Handle local filesystem path
+                let mut output_path = self.output_dir.clone();
+                if let Some(part) = part {
+                    // If a partition is specified, create a subdirectory for it
+                    output_path.push(table.to_string());
+                    self.ensure_directory_exists(&output_path)?;
+                    output_path.push(format!("{table}.{part}.{extension}"));
+                } else {
+                    // No partition specified, output to a single file
+                    output_path.push(format!("{table}.{extension}"));
+                }
+                Ok(OutputLocation::File(output_path))
             }
-            Ok(OutputLocation::File(output_path))
         }
     }
 

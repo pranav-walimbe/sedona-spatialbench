@@ -77,4 +77,91 @@ impl ZoneDfArgs {
             self.output_dir.join("zone.parquet")
         }
     }
+
+    /// Whether the output directory is an S3 URI (starts with `s3://`)
+    pub fn is_s3(&self) -> bool {
+        self.output_dir.to_string_lossy().starts_with("s3://")
+    }
+
+    /// Compute the S3 object key for this zone output.
+    ///
+    /// Returns the full S3 URI (e.g. `s3://bucket/prefix/zone.parquet`).
+    pub fn output_s3_uri(&self) -> String {
+        let base = self.output_dir.to_string_lossy();
+        let base = base.trim_end_matches('/');
+        if self.parts.unwrap_or(1) > 1 {
+            format!("{}/zone/zone.{}.parquet", base, self.part.unwrap_or(1))
+        } else {
+            format!("{}/zone.parquet", base)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn default_args(output_dir: &str) -> ZoneDfArgs {
+        ZoneDfArgs::new(
+            1.0,
+            PathBuf::from(output_dir),
+            None,
+            None,
+            None,
+            128 * 1024 * 1024,
+            ParquetCompression::ZSTD(Default::default()),
+        )
+    }
+
+    #[test]
+    fn is_s3_with_s3_uri() {
+        let args = default_args("s3://my-bucket/output");
+        assert!(args.is_s3());
+    }
+
+    #[test]
+    fn is_s3_with_local_path() {
+        let args = default_args("/tmp/output");
+        assert!(!args.is_s3());
+    }
+
+    #[test]
+    fn is_s3_with_relative_path() {
+        let args = default_args("./output");
+        assert!(!args.is_s3());
+    }
+
+    #[test]
+    fn output_s3_uri_single_file() {
+        let args = default_args("s3://bucket/prefix");
+        assert_eq!(args.output_s3_uri(), "s3://bucket/prefix/zone.parquet");
+    }
+
+    #[test]
+    fn output_s3_uri_single_file_trailing_slash() {
+        let args = default_args("s3://bucket/prefix/");
+        assert_eq!(args.output_s3_uri(), "s3://bucket/prefix/zone.parquet");
+    }
+
+    #[test]
+    fn output_s3_uri_with_partitions() {
+        let mut args = default_args("s3://bucket/prefix");
+        args.parts = Some(10);
+        args.part = Some(3);
+        assert_eq!(
+            args.output_s3_uri(),
+            "s3://bucket/prefix/zone/zone.3.parquet"
+        );
+    }
+
+    #[test]
+    fn output_s3_uri_partition_defaults_to_part_1() {
+        let mut args = default_args("s3://bucket/prefix");
+        args.parts = Some(5);
+        // part not set — should default to 1
+        assert_eq!(
+            args.output_s3_uri(),
+            "s3://bucket/prefix/zone/zone.1.parquet"
+        );
+    }
 }

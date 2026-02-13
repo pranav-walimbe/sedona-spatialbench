@@ -179,6 +179,26 @@ spatialbench-cli --scale-factor 1 --mb-per-file 256 --output-dir sf1-parquet
 spatialbench-cli --scale-factor 10 --mb-per-file 256 --output-dir sf10-parquet
 ```
 
+#### Generate Data Directly to S3
+
+You can generate data directly to Amazon S3 or S3-compatible storage by providing an S3 URI as the output directory:
+
+```bash
+# Set AWS credentials
+export AWS_ACCESS_KEY_ID="your-access-key"
+export AWS_SECRET_ACCESS_KEY="your-secret-key"
+export AWS_REGION="us-west-2"  # Must match your bucket's region
+
+# Generate to S3
+spatialbench-cli --scale-factor 10 --mb-per-file 256 --output-dir s3://my-bucket/spatialbench/sf10
+
+# For S3-compatible services (MinIO, etc.)
+export AWS_ENDPOINT="http://localhost:9000"
+spatialbench-cli --scale-factor 1 --output-dir s3://my-bucket/data
+```
+
+The S3 writer uses streaming multipart upload, buffering data in 32MB chunks before uploading parts. This ensures memory-efficient generation even for large datasets. All output formats (Parquet, CSV, TBL) are supported, and the generated files are byte-for-byte identical to local generation.
+
 #### Custom Spider Configuration
 
 You can override these defaults at runtime by passing a YAML file via the `--config` flag:

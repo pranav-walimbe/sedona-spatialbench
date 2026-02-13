@@ -77,6 +77,16 @@ pub struct GenerationPlan {
 
 pub const DEFAULT_PARQUET_ROW_GROUP_BYTES: i64 = 128 * 1024 * 1024;
 
+/// Buffer size for Parquet writing (32MB)
+///
+/// This buffer size is used for:
+/// - Local file writing with BufWriter
+/// - S3 multipart upload parts
+///
+/// The 32MB size provides good performance and is well above the AWS S3
+/// minimum part size requirement of 5MB for multipart uploads.
+pub const PARQUET_BUFFER_SIZE: usize = 32 * 1024 * 1024;
+
 impl GenerationPlan {
     /// Returns a GenerationPlan number of parts to generate
     ///
@@ -207,7 +217,7 @@ impl GenerationPlan {
         })
     }
 
-    /// Return the number of part(ititions) this plan will generate
+    /// Return the number of part(ition)s this plan will generate
     pub fn chunk_count(&self) -> usize {
         self.part_list.clone().count()
     }

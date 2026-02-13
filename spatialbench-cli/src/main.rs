@@ -28,6 +28,7 @@ mod output_plan;
 mod parquet;
 mod plan;
 mod runner;
+mod s3_writer;
 mod spatial_config_file;
 mod statistics;
 mod tbl;
@@ -252,8 +253,9 @@ impl Cli {
             debug!("Logging configured from environment variables");
         }
 
-        // Create output directory if it doesn't exist and we are not writing to stdout.
-        if !self.stdout {
+        // Create output directory if it doesn't exist and we are not writing to stdout
+        // or to S3 (where local directories are meaningless).
+        if !self.stdout && !self.output_dir.to_string_lossy().starts_with("s3://") {
             fs::create_dir_all(&self.output_dir)?;
         }
 
@@ -386,18 +388,23 @@ impl Cli {
     }
 }
 
-impl IntoSize for BufWriter<Stdout> {
-    fn into_size(self) -> Result<usize, io::Error> {
-        // we can't get the size of stdout, so just return 0
+impl AsyncFinalize for BufWriter<Stdout> {
+    async fn finalize(self) -> Result<usize, io::Error> {
         Ok(0)
     }
 }
 
-impl IntoSize for BufWriter<File> {
-    fn into_size(self) -> Result<usize, io::Error> {
+impl AsyncFinalize for BufWriter<File> {
+    async fn finalize(self) -> Result<usize, io::Error> {
         let file = self.into_inner()?;
         let metadata = file.metadata()?;
         Ok(metadata.len() as usize)
+    }
+}
+
+impl AsyncFinalize for s3_writer::S3Writer {
+    async fn finalize(self) -> Result<usize, io::Error> {
+        self.finish().await
     }
 }
 
@@ -414,6 +421,11 @@ impl<W: Write> WriterSink<W> {
             statistics: WriteStatistics::new("buffers"),
         }
     }
+
+    /// Consume the sink and return the inner writer for further finalization.
+    fn into_inner(self) -> W {
+        self.inner
+    }
 }
 
 impl<W: Write + Send> Sink for WriterSink<W> {
@@ -423,7 +435,8 @@ impl<W: Write + Send> Sink for WriterSink<W> {
         self.inner.write_all(buffer)
     }
 
-    fn flush(mut self) -> Result<(), io::Error> {
-        self.inner.flush()
+    fn flush(mut self) -> Result<Self, io::Error> {
+        self.inner.flush()?;
+        Ok(self)
     }
 }

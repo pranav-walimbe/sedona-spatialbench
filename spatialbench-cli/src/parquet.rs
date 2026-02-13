@@ -33,9 +33,17 @@ use std::io::Write;
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender};
 
-pub trait IntoSize {
-    /// Convert the object into a size
-    fn into_size(self) -> Result<usize, io::Error>;
+/// Finalize a writer after all Parquet data has been written.
+///
+/// This is called from the async context (outside `spawn_blocking`) so
+/// that implementations like [`S3Writer`](crate::s3_writer::S3Writer) can
+/// `.await` their upload without competing with the tokio runtime for
+/// threads — avoiding deadlocks under concurrent plans.
+///
+/// For local files and stdout the implementation is trivially synchronous.
+pub trait AsyncFinalize: Write + Send + 'static {
+    /// Finalize the writer and return the total bytes written.
+    fn finalize(self) -> impl std::future::Future<Output = Result<usize, io::Error>> + Send;
 }
 
 /// Converts a set of RecordBatchIterators into a Parquet file
@@ -44,7 +52,7 @@ pub trait IntoSize {
 ///
 /// Note the input is an iterator of [`RecordBatchIterator`]; The batches
 /// produced by each iterator is encoded as its own row group.
-pub async fn generate_parquet<W: Write + Send + IntoSize + 'static, I>(
+pub async fn generate_parquet<W: AsyncFinalize, I>(
     writer: W,
     iter_iter: I,
     num_threads: usize,
@@ -105,23 +113,24 @@ where
     ) = tokio::sync::mpsc::channel(num_threads);
     let writer_task = tokio::task::spawn_blocking(move || {
         // Create parquet writer
-        let mut writer =
-            SerializedFileWriter::new(writer, root_schema, writer_properties_captured).unwrap();
+        let mut writer = SerializedFileWriter::new(writer, root_schema, writer_properties_captured)
+            .map_err(io::Error::from)?;
 
         while let Some(chunks) = rx.blocking_recv() {
             // Start row group
-            let mut row_group_writer = writer.next_row_group().unwrap();
+            let mut row_group_writer = writer.next_row_group().map_err(io::Error::from)?;
 
             // Slap the chunks into the row group
             for chunk in chunks {
-                chunk.append_to_row_group(&mut row_group_writer).unwrap();
+                chunk
+                    .append_to_row_group(&mut row_group_writer)
+                    .map_err(io::Error::from)?;
             }
-            row_group_writer.close().unwrap();
+            row_group_writer.close().map_err(io::Error::from)?;
             statistics.increment_chunks(1);
         }
-        let size = writer.into_inner()?.into_size()?;
-        statistics.increment_bytes(size);
-        Ok(()) as Result<(), io::Error>
+        let inner = writer.into_inner().map_err(io::Error::from)?;
+        Ok((inner, statistics)) as Result<(W, WriteStatistics), io::Error>
     });
 
     // now, drive the input stream and send results to the writer task
@@ -135,8 +144,14 @@ where
     // signal the writer task that we are done
     drop(tx);
 
-    // Wait for the writer task to finish
-    writer_task.await??;
+    // Wait for the blocking writer task to return the underlying writer
+    let (inner, mut statistics) = writer_task.await??;
+
+    // Finalize in the async context so S3 uploads can .await without
+    // competing for tokio runtime threads (prevents deadlock under
+    // concurrent plans).
+    let size = inner.finalize().await?;
+    statistics.increment_bytes(size);
 
     Ok(())
 }

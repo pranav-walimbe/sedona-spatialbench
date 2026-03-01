@@ -111,7 +111,7 @@ jobs:
 
       - name: Cache benchmark data
         id: cache-data
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: benchmark-data-sf${{ env.SCALE_FACTOR }}
           key: benchmark-data-${{ env.HF_DATA_VERSION }}-sf${{ env.SCALE_FACTOR }}
@@ -194,7 +194,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Restore benchmark data from cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: benchmark-data-sf${{ env.SCALE_FACTOR }}
           key: benchmark-data-${{ env.HF_DATA_VERSION }}-sf${{ env.SCALE_FACTOR }}
@@ -253,7 +253,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Restore benchmark data from cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: benchmark-data-sf${{ env.SCALE_FACTOR }}
           key: benchmark-data-${{ env.HF_DATA_VERSION }}-sf${{ env.SCALE_FACTOR }}
@@ -299,7 +299,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Restore benchmark data from cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: benchmark-data-sf${{ env.SCALE_FACTOR }}
           key: benchmark-data-${{ env.HF_DATA_VERSION }}-sf${{ env.SCALE_FACTOR }}
@@ -355,7 +355,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Restore benchmark data from cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: benchmark-data-sf${{ env.SCALE_FACTOR }}
           key: benchmark-data-${{ env.HF_DATA_VERSION }}-sf${{ env.SCALE_FACTOR }}

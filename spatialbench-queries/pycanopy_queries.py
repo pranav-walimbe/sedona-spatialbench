@@ -99,7 +99,15 @@ def q4(data_paths: dict[str, str]) -> pl.DataFrame:
     top_n = 1000
 
     trip = pl.read_parquet(data_paths["trip"], columns=["t_tripkey", "t_tip", "t_pickuploc"])
-    top = trip.sort(["t_tip", "t_tripkey"], descending=[True, False]).head(top_n)
+    # Sort a narrow (key, tip) projection to find the top-N keys, then gather geometry
+    # for only those rows, instead of dragging the WKB column through the full sort
+    top_keys = (
+        trip.select(["t_tripkey", "t_tip"])
+        .sort(["t_tip", "t_tripkey"], descending=[True, False])
+        .head(top_n)
+        .select("t_tripkey")
+    )
+    top = top_keys.join(trip.select(["t_tripkey", "t_pickuploc"]), on="t_tripkey", how="left")
     qx, qy = pc.wkb_points_to_xy(top["t_pickuploc"])
     query_df = top.select("t_tripkey").with_columns(pl.Series("qx", qx), pl.Series("qy", qy))
 

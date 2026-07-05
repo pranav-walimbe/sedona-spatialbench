@@ -99,8 +99,7 @@ def q4(data_paths: dict[str, str]) -> pl.DataFrame:
     top_n = 1000
 
     trip = pl.read_parquet(data_paths["trip"], columns=["t_tripkey", "t_tip", "t_pickuploc"])
-    # Sort a narrow (key, tip) projection to find the top-N keys, then gather geometry
-    # for only those rows, instead of dragging the WKB column through the full sort
+
     top_keys = (
         trip.select(["t_tripkey", "t_tip"])
         .sort(["t_tip", "t_tripkey"], descending=[True, False])

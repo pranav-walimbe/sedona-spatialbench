@@ -243,10 +243,22 @@ def q9(data_paths: dict[str, str]) -> pl.DataFrame:
     sf = pc.SpatialFrame.from_wkb_polygons(buildings, "b_boundary")
     pairs = sf.intersects_pairs(key_col="b_buildingkey")
     if pairs.height == 0:
-        return pl.DataFrame(schema={"building_1": pl.Int64, "building_2": pl.Int64, "iou": pl.Float64})
+        return pl.DataFrame(
+            schema={
+                "building_1": pl.Int64,
+                "building_2": pl.Int64,
+                "area1": pl.Float64,
+                "area2": pl.Float64,
+                "overlap_area": pl.Float64,
+                "iou": pl.Float64,
+            }
+        )
     return pairs.select(
         pl.col("b_buildingkey_1").alias("building_1"),
         pl.col("b_buildingkey_2").alias("building_2"),
+        pl.col("area_left").alias("area1"),
+        pl.col("area_right").alias("area2"),
+        "overlap_area",
         "iou",
     ).sort(["iou", "building_1", "building_2"], descending=[True, False, False])
 
@@ -326,11 +338,17 @@ def q12(data_paths: dict[str, str]) -> pl.DataFrame:
 
     trip = pl.read_parquet(data_paths["trip"], columns=["t_tripkey", "t_pickuploc"])
     qx, qy = pc.wkb_points_to_xy(trip["t_pickuploc"])
-    query_df = trip.select("t_tripkey").with_columns(pl.Series("qx", qx), pl.Series("qy", qy))
+    query_df = trip.select("t_tripkey", "t_pickuploc").with_columns(pl.Series("qx", qx), pl.Series("qy", qy))
 
     return (
         sf.lazy()
         .polygon_knn_join(query_df, "qx", "qy", k=k, sorted_output=True)
-        .select(["t_tripkey", "b_buildingkey", "distance_to_polygon"])
+        .select(
+            "t_tripkey",
+            "t_pickuploc",
+            "b_buildingkey",
+            pl.col("b_name").alias("building_name"),
+            pl.col("distance_to_polygon").alias("distance_to_building"),
+        )
         .collect()
     )

@@ -343,12 +343,7 @@ def q12(data_paths: dict[str, str]) -> pl.DataFrame:
     return (
         sf.lazy()
         .polygon_knn_join(query_df, "qx", "qy", k=k, sorted_output=True)
-        .select(
-            "t_tripkey",
-            "t_pickuploc",
-            "b_buildingkey",
-            pl.col("b_name").alias("building_name"),
-            pl.col("distance_to_polygon").alias("distance_to_building"),
-        )
+        .select("t_tripkey", "t_pickuploc", "b_buildingkey", "b_name", "distance_to_polygon")
         .collect()
+        .rename({"b_name": "building_name", "distance_to_polygon": "distance_to_building"})
     )
